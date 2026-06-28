@@ -23,7 +23,7 @@ export default function Home() {
 
   return (
     <div className="h-screen w-screen">
-      {showMenu && <SearchBox />}
+      {showMenu && <SearchBox onClose={() => setshowMenu(false)} />}
       <InfiniteCanvas>
         <div className="absolute w-max text-gray-400">
           Press Ctrl +K for menu
