@@ -1,7 +1,14 @@
 "use client";
 import { useRef, useState, useEffect } from "react";
-import { useCanvasStore } from "./serverComponents/usecanvasstore";
+import {
+  useCanvasStore,
+  computeMetrics,
+} from "./serverComponents/usecanvasstore";
 import CanvasEl from "./serverComponents/canvaselement";
+import Connector from "./connector";
+import ConfigCard from "./configCard";
+import PriceBar from "./pricebar";
+
 type T = { x: number; y: number; s: number };
 
 export default function InfiniteCanvas({
@@ -12,18 +19,33 @@ export default function InfiniteCanvas({
   const ref = useRef<HTMLDivElement>(null);
   const [t, setT] = useState<T>({ x: 0, y: 0, s: 0 });
   const drag = useRef<{ ox: number; oy: number } | null>(null);
-  const { elements, tool, setTool, addElement, setSelected } = useCanvasStore();
+  const {
+    elements,
+    connections,
+    tool,
+    setTool,
+    addElement,
+    setSelected,
+    setMetrics,
+    pendingNodeConfig,
+    clearPendingNodeConfig,
+    setConnectFrom,
+  } = useCanvasStore();
+
+  useEffect(() => {
+    const m = computeMetrics(elements, connections);
+    setMetrics(m);
+  }, [elements, connections]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Backspace" && e.key !== "Delete") return;
-      if ((e.target as HTMLElement).tagName === "TEXTAREA") return;
-      const { selected } = useCanvasStore.getState();
-      if (!selected) return;
-      useCanvasStore.setState((s) => ({
-        elements: s.elements.filter((el) => el.id !== selected),
-        selected: null,
-      }));
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return;
+      const state = useCanvasStore.getState();
+      if (state.pendingType || state.configTarget) return;
+      if (!state.selected) return;
+      state.removeElement(state.selected);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -75,19 +97,46 @@ export default function InfiniteCanvas({
       setSelected(null);
       return;
     }
+
+    if (tool === "connector") {
+      setConnectFrom(null);
+      setTool(null);
+      return;
+    }
+
     const rect = ref.current!.getBoundingClientRect();
     const wx = (e.clientX - rect.left - t.x) / t.s;
     const wy = (e.clientY - rect.top - t.y) / t.s;
-    addElement({
-      id: crypto.randomUUID(),
-      type: tool,
-      x: wx - (tool === "rectangle" ? 60 : 40),
-      y: wy - (tool === "rectangle" ? 40 : 14),
-      w: tool === "rectangle" ? 120 : 80,
-      h: tool === "rectangle" ? 80 : 28,
-      text: tool === "text" ? "Text" : undefined,
-    });
-    setTool(null);
+
+    if (tool === "rectangle" || tool === "text") {
+      addElement({
+        id: crypto.randomUUID(),
+        type: tool,
+        x: wx - (tool === "rectangle" ? 60 : 40),
+        y: wy - (tool === "rectangle" ? 40 : 14),
+        w: tool === "rectangle" ? 120 : 80,
+        h: tool === "rectangle" ? 80 : 28,
+        text: tool === "text" ? "Text" : undefined,
+      });
+      setTool(null);
+      return;
+    }
+
+    if (pendingNodeConfig && pendingNodeConfig.type === tool) {
+      const w = 170;
+      const h = 76;
+      addElement({
+        id: crypto.randomUUID(),
+        type: tool,
+        x: wx - w / 2,
+        y: wy - h / 2,
+        w,
+        h,
+        ...pendingNodeConfig.data,
+      });
+      clearPendingNodeConfig();
+      setTool(null);
+    }
   };
 
   return (
@@ -108,10 +157,12 @@ export default function InfiniteCanvas({
       }}
     >
       <Toolbar />
+      <ConfigCard />
       <div
         className="absolute origin-top-left"
         style={{ transform: `translate(${t.x}px,${t.y}px) scale(${t.s})` }}
       >
+        <Connector />
         {elements.map((el) => (
           <CanvasEl key={el.id} el={el} scale={t.s} />
         ))}
@@ -124,28 +175,40 @@ export default function InfiniteCanvas({
 function Toolbar() {
   const { tool, setTool } = useCanvasStore();
   return (
-    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 bg-[#1e1e1e] border border-[#2e2e2e] rounded-lg px-3 py-2">
-      <button
-        title="Rectangle"
-        onClick={(e) => {
-          e.stopPropagation();
-          setTool(tool === "rectangle" ? null : "rectangle");
-        }}
-        className={`p-1 rounded-md text-white text-sm transition-colors duration-150 ${tool === "rectangle" ? "bg-[#B7ADCF]/20 text-[#B7ADCF]" : "hover:bg-[#3a3a4a]"}`}
-      >
-        <img src="/rectangle-horizontal.svg" className="invert w-5 h-5" />
-      </button>
-      <span className="w-0.5 h-4 rounded-xl bg-[#3a3a4a]" />
-      <button
-        title="Text"
-        onClick={(e) => {
-          e.stopPropagation();
-          setTool(tool === "text" ? null : "text");
-        }}
-        className={`p-1 rounded-md text-white text-sm transition-colors duration-150 ${tool === "text" ? "bg-[#B7ADCF]/20 text-[#B7ADCF]" : "hover:bg-[#3a3a4a]"}`}
-      >
-        <img src="/type-outline.svg" className="w-5 h-5" />
-      </button>
+    <div>
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 bg-[#1e1e1e] border border-[#2e2e2e] rounded-lg px-3 py-2">
+        <button
+          title="Rectangle"
+          onClick={(e) => {
+            e.stopPropagation();
+            setTool(tool === "rectangle" ? null : "rectangle");
+          }}
+          className={`p-1 rounded-md text-white text-sm transition-colors duration-150 ${tool === "rectangle" ? "bg-[#B7ADCF]/20 text-[#B7ADCF]" : "hover:bg-[#3a3a4a]"}`}
+        >
+          <img src="/rectangle-horizontal.svg" className="invert w-5 h-5" />
+        </button>
+        <span className="w-0.5 h-4 rounded-xl bg-[#3a3a4a]" />
+        <button
+          title="Text"
+          onClick={(e) => {
+            e.stopPropagation();
+            setTool(tool === "text" ? null : "text");
+          }}
+          className={`p-1 rounded-md text-white text-sm transition-colors duration-150 ${tool === "text" ? "bg-[#B7ADCF]/20 text-[#B7ADCF]" : "hover:bg-[#3a3a4a]"}`}
+        >
+          <img src="/type-outline.svg" className="w-5 h-5" />
+        </button>
+        {tool === "connector" && (
+          <>
+            <span className="w-0.5 h-4 rounded-xl bg-[#3a3a4a]" />
+            <span className="text-[11px] text-[#B7ADCF] px-1">
+              click a source node, then a target node
+            </span>
+          </>
+        )}
+      </div>
+
+      <PriceBar />
     </div>
   );
 }

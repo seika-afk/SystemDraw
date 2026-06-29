@@ -1,6 +1,13 @@
 "use client";
-import { useRef, useState } from "react";
-import { useCanvasStore, CanvasElement as El } from "./usecanvasstore";
+import { useState } from "react";
+import {
+  useCanvasStore,
+  CanvasElement as El,
+  LB_PRESETS,
+  SERVER_PRESETS,
+  NodeMetrics,
+} from "./usecanvasstore";
+
 const HANDLES = [
   { cursor: "nwse-resize", x: 0, y: 0 },
   { cursor: "ns-resize", x: 0.5, y: 0 },
@@ -12,9 +19,153 @@ const HANDLES = [
   { cursor: "ew-resize", x: 0, y: 0.5 },
 ];
 
+const NODE_TYPES = ["user", "load_balancer", "server", "api_gateway"] as const;
+function isNode(t: El["type"]): t is (typeof NODE_TYPES)[number] {
+  return (NODE_TYPES as readonly string[]).includes(t);
+}
+
+const NODE_COLORS: Record<string, string> = {
+  user: "#B7ADCF",
+  load_balancer: "#7ab8e0",
+  server: "#7ed0a0",
+  api_gateway: "#e0a87a",
+};
+
+function CostLine({ metrics }: { metrics?: NodeMetrics }) {
+  if (!metrics) return null;
+  return (
+    <div className="text-[10px] text-[#666] mt-1">
+      ${metrics.costPerHour.toFixed(4)}/hr
+    </div>
+  );
+}
+
+function NodeBadge({
+  el,
+  metrics,
+  simulating,
+}: {
+  el: El;
+  metrics?: NodeMetrics;
+  simulating: boolean;
+}) {
+  const overloaded = simulating && metrics?.overloaded;
+
+  if (el.type === "user") {
+    return (
+      <>
+        <div
+          className="text-[11px] uppercase tracking-wide"
+          style={{ color: NODE_COLORS.user }}
+        >
+          User
+        </div>
+        <div className="text-[13px] text-white mt-1">{el.rps ?? 10} req/s</div>
+        <div className="text-[11px] text-[#888] truncate">{el.path ?? "/"}</div>
+      </>
+    );
+  }
+
+  if (el.type === "load_balancer") {
+    const preset = el.lbProvider ? LB_PRESETS[el.lbProvider] : null;
+    return (
+      <>
+        <div
+          className="text-[11px] uppercase tracking-wide"
+          style={{ color: NODE_COLORS.load_balancer }}
+        >
+          Load Balancer
+        </div>
+        <div className="text-[13px] text-white mt-1 truncate">
+          {preset?.label ?? "Not configured"}
+        </div>
+        <div className="text-[11px] text-[#888]">
+          {el.routingStrategy ?? "round_robin"}
+        </div>
+        <CostLine metrics={metrics} />
+      </>
+    );
+  }
+
+  if (el.type === "server") {
+    const preset = el.serverProvider ? SERVER_PRESETS[el.serverProvider] : null;
+    return (
+      <>
+        <div
+          className="text-[11px] uppercase tracking-wide"
+          style={{ color: NODE_COLORS.server }}
+        >
+          Server
+        </div>
+        <div className="text-[13px] text-white mt-1 truncate">
+          {preset?.label ?? "Not configured"}
+        </div>
+        <div className="text-[11px] text-[#888] truncate">
+          {el.servedPaths?.length
+            ? el.servedPaths.join(", ")
+            : "No path assigned"}
+        </div>
+        {metrics && (
+          <div
+            className={`text-[10px] mt-1 ${overloaded ? "text-[#e07a7a]" : "text-[#666]"}`}
+          >
+            {metrics.rps.toFixed(0)} /{" "}
+            {metrics.capacity === Infinity ? "∞" : metrics.capacity} req/s
+            {overloaded ? " ⚠ overloaded" : ""}
+          </div>
+        )}
+        <CostLine metrics={metrics} />
+      </>
+    );
+  }
+
+  // api_gateway
+  const cloudLabel =
+    el.gatewayCloud === "azure"
+      ? `Azure APIM — ${el.azureApimTier ?? "consumption"}`
+      : `AWS — ${el.apiType ?? "http"}`;
+  return (
+    <>
+      <div
+        className="text-[11px] uppercase tracking-wide"
+        style={{ color: NODE_COLORS.api_gateway }}
+      >
+        API Gateway
+      </div>
+      <div className="text-[13px] text-white mt-1 truncate">{cloudLabel}</div>
+      <div className="text-[11px] text-[#888] truncate">
+        {el.routes?.length
+          ? `${el.routes.length} route${el.routes.length > 1 ? "s" : ""}`
+          : "No routes configured"}
+      </div>
+      {metrics && (
+        <div
+          className={`text-[10px] mt-1 ${overloaded ? "text-[#e07a7a]" : "text-[#666]"}`}
+        >
+          {metrics.rps.toFixed(0)} /{" "}
+          {metrics.capacity === Infinity ? "∞" : metrics.capacity} req/s
+          {overloaded ? " ⚠ overloaded" : ""}
+        </div>
+      )}
+      <CostLine metrics={metrics} />
+    </>
+  );
+}
+
 export default function CanvasEl({ el, scale }: { el: El; scale: number }) {
-  const { selected, setSelected, updateElement } = useCanvasStore();
+  const {
+    selected,
+    setSelected,
+    updateElement,
+    tool,
+    connectFrom,
+    metrics,
+    simulating,
+  } = useCanvasStore();
   const isSelected = selected === el.id;
+  const isConnectSource = connectFrom === el.id;
+  const nodeMetrics = metrics[el.id];
+  const overloaded = simulating && nodeMetrics?.overloaded;
   const [editing, setEditing] = useState(false);
 
   const startDrag = (e: React.MouseEvent, handle: number | null) => {
@@ -67,21 +218,46 @@ export default function CanvasEl({ el, scale }: { el: El; scale: number }) {
     window.addEventListener("mouseup", onUp);
   };
 
+  const handleClick = (e: React.MouseEvent) => {
+    const state = useCanvasStore.getState();
+    if (state.tool === "connector") {
+      e.stopPropagation();
+      if (!state.connectFrom) {
+        state.setConnectFrom(el.id);
+      } else if (state.connectFrom !== el.id) {
+        state.addConnection(state.connectFrom, el.id);
+        state.setConnectFrom(null);
+        state.setTool(null);
+      } else {
+        state.setConnectFrom(null);
+      }
+      return;
+    }
+    if (!state.tool) e.stopPropagation();
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isNode(el.type)) {
+      useCanvasStore.getState().setConfigTarget(el.id);
+    } else if (el.type === "text") {
+      setEditing(true);
+    }
+  };
+
   return (
     <div
       onMouseDown={(e) => {
         if (!useCanvasStore.getState().tool) startDrag(e, null);
       }}
-      onClick={(e) => {
-        if (!useCanvasStore.getState().tool) e.stopPropagation();
-      }}
+      onClick={handleClick}
       style={{
         position: "absolute",
         left: el.x,
         top: el.y,
         width: el.w,
         height: el.h,
-        cursor: "move",
+        cursor: tool === "connector" ? "pointer" : "move",
         boxSizing: "border-box",
       }}
     >
@@ -96,54 +272,73 @@ export default function CanvasEl({ el, scale }: { el: El; scale: number }) {
             boxSizing: "border-box",
           }}
         />
-      ) : editing ? (
-        <textarea
-          autoFocus
-          defaultValue={el.text ?? "Text"}
-          onBlur={(e) => {
-            updateElement(el.id, { text: e.target.value });
-            setEditing(false);
-          }}
-          style={{
-            width: "100%",
-            height: "100%",
-            background: "transparent",
-            border: "1.5px solid #B7ADCF",
-            borderRadius: 4,
-            color: "#fff",
-            fontSize: 14,
-            padding: 4,
-            resize: "none",
-            outline: "none",
-            fontFamily: "inherit",
-            boxSizing: "border-box",
-          }}
-        />
+      ) : el.type === "text" ? (
+        editing ? (
+          <textarea
+            autoFocus
+            defaultValue={el.text ?? "Text"}
+            onBlur={(e) => {
+              updateElement(el.id, { text: e.target.value });
+              setEditing(false);
+            }}
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "transparent",
+              border: "1.5px solid #B7ADCF",
+              borderRadius: 4,
+              color: "#fff",
+              fontSize: 14,
+              padding: 4,
+              resize: "none",
+              outline: "none",
+              fontFamily: "inherit",
+              boxSizing: "border-box",
+            }}
+          />
+        ) : (
+          <div
+            onDoubleClick={handleDoubleClick}
+            style={{
+              width: "100%",
+              height: "100%",
+              color: "#fff",
+              fontSize: 14,
+              padding: 4,
+              border: `1.5px solid ${isSelected ? "#B7ADCF" : "transparent"}`,
+              borderRadius: 4,
+              userSelect: "none",
+              wordBreak: "break-word",
+              boxSizing: "border-box",
+            }}
+          >
+            {el.text ?? "Text"}
+          </div>
+        )
       ) : (
         <div
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setEditing(true);
-          }}
+          onDoubleClick={handleDoubleClick}
           style={{
             width: "100%",
             height: "100%",
-            color: "#fff",
-            fontSize: 14,
-            padding: 4,
-            border: `1.5px solid ${isSelected ? "#B7ADCF" : "transparent"}`,
-            borderRadius: 4,
-            userSelect: "none",
-            wordBreak: "break-word",
+            border: `1.5px solid ${overloaded ? "#e07a7a" : isConnectSource ? "#ffd479" : isSelected ? "#B7ADCF" : "#3a3a4a"}`,
+            borderRadius: 8,
+            background: "#1e1e1e",
+            padding: 10,
             boxSizing: "border-box",
+            overflow: "hidden",
+            boxShadow: overloaded
+              ? "0 0 0 3px rgba(224,122,122,0.2)"
+              : undefined,
           }}
         >
-          {el.text ?? "Text"}
+          <NodeBadge el={el} metrics={nodeMetrics} simulating={simulating} />
         </div>
       )}
 
       {isSelected &&
         !editing &&
+        tool !== "connector" &&
         HANDLES.map((h, i) => (
           <div
             key={i}

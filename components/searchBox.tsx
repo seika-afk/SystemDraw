@@ -1,29 +1,58 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { Search, Square, Type } from "lucide-react";
-import { useCanvasStore } from "./serverComponents/usecanvasstore";
+import {
+  Search,
+  Square,
+  Type,
+  User,
+  Network,
+  Server,
+  ArrowRight,
+  Globe,
+} from "lucide-react";
+import { useCanvasStore, ToolType } from "./serverComponents/usecanvasstore";
 
 interface Item {
   label: string;
-  shape: "rectangle" | "text";
+  shape: ToolType;
 }
 
 const ITEMS: Item[] = [
   { label: "Rectangle", shape: "rectangle" },
   { label: "Text", shape: "text" },
+  { label: "User", shape: "user" },
+  { label: "Load Balancer", shape: "load_balancer" },
+  { label: "Server", shape: "server" },
+  { label: "API Gateway", shape: "api_gateway" },
+  { label: "Connector", shape: "connector" },
 ];
 
 function ItemIcon({ item, active }: { item: Item; active: boolean }) {
   const color = active ? "#B7ADCF" : "#555";
-  if (item.shape === "rectangle") return <Square size={15} style={{ color }} />;
-  return <Type size={15} style={{ color }} />;
+  const size = 15;
+  switch (item.shape) {
+    case "rectangle":
+      return <Square size={size} style={{ color }} />;
+    case "text":
+      return <Type size={size} style={{ color }} />;
+    case "user":
+      return <User size={size} style={{ color }} />;
+    case "load_balancer":
+      return <Network size={size} style={{ color }} />;
+    case "server":
+      return <Server size={size} style={{ color }} />;
+    case "api_gateway":
+      return <Globe size={size} style={{ color }} />;
+    case "connector":
+      return <ArrowRight size={size} style={{ color }} />;
+  }
 }
 
 export default function SearchBox({ onClose }: { onClose?: () => void }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { setTool } = useCanvasStore();
+  const { setTool, setPendingType } = useCanvasStore();
 
   const results = ITEMS.filter((i) =>
     i.label.toLowerCase().includes(query.toLowerCase()),
@@ -38,7 +67,17 @@ export default function SearchBox({ onClose }: { onClose?: () => void }) {
   }, [query]);
 
   function handleSelect(item: Item) {
-    setTool(item.shape);
+    if (
+      item.shape === "user" ||
+      item.shape === "load_balancer" ||
+      item.shape === "server" ||
+      item.shape === "api_gateway"
+    ) {
+      // open the config card first — element gets placed after the user confirms a config
+      setPendingType(item.shape);
+    } else {
+      setTool(item.shape);
+    }
     onClose?.();
   }
 
@@ -66,7 +105,7 @@ export default function SearchBox({ onClose }: { onClose?: () => void }) {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search shapes..."
+            placeholder="Search shapes, nodes, connector..."
             className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-[#555]"
           />
           <kbd
