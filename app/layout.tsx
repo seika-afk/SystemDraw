@@ -9,6 +9,9 @@ const googleSans = Google_Sans({
 export const metadata: Metadata = {
   title: "SystemDraw",
   description: "Drag.Drop.Simulate Systems.",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export default function RootLayout({
